@@ -527,7 +527,7 @@ void adc_scan_handle(void)
     adc_charging_val = 0;
 
     adc_sel_pin(ADC_PIN_P02_AN1); // 切换到检测电池降压后的电压的检测引脚
-    for (i = 0; i < 10; i++)      //  // 每55ms进入一次，循环内每次间隔约4.8ms
+    for (i = 0; i < 10; i++)      // 每55ms进入一次，循环内每次间隔约4.8ms
     {
         adc_val = adc_get_val();
 
@@ -555,7 +555,7 @@ void adc_scan_handle(void)
                 need_charge_cnt++;
             }
 
-            // if (charge_time_cnt >= (u32)30 * 1000 && 0 == flag_is_led_breath_disable) // 30 * 1000ms // 测试用
+            // if (charge_time_cnt >= ((u32)3 * 10 * 1000) && 0 == flag_is_led_breath_disable) // TEST ONLY   30 s
             if (charge_time_cnt >= ((u32)3 * 60 * 60 * 1000 + (u32)7 * 60 * 1000) && 0 == flag_is_led_breath_disable) // 3h7min
             {
                 // 如果充电已经累计了一定时间
@@ -563,23 +563,33 @@ void adc_scan_handle(void)
 
                 // 不使能充电指示灯
                 flag_is_led_breath_disable = 1;
-                LED_CHARGING_OFF(); // 关闭充电指示灯
-                LED_WORKING_ON();   // 打开电源指示灯，表示充满电
+                flag_is_bat_nearly_fully_charged = 1; // 标志位，表示电池即将充满电
+                LED_CHARGING_OFF();                   // 关闭充电指示灯
+                LED_WORKING_ON();                     // 打开电源指示灯，表示充满电
             }
 
+            /*
+                如果检测到拔出了电池
+                新版的功能--要求，在充电时，没有电池的情况下，让绿灯快闪
+
+                充电时检测不到拔出了电池，这里的功能没有起到效果
+                同时，为了节省程序空间，去掉了这部分代码
+            */
+#if 0                               
             if (flag_bat_is_empty)
-            {
-// 如果检测到拔出了电池
-#if 1                               // 新版的功能--要求，在充电时，没有电池的情况下，让绿灯快闪
+            {                           
                 LED_CHARGING_OFF(); // 关闭充电指示灯
                 PWM2EC = 0;         // 关闭控制升压电路的pwm（建议是，插上充钱器时，不关闭控制升压电路的PWM，但是在测试时，充电一侧会严重发热）
                 T2DATA = 0;
                 FLAG_BAT_IS_NEED_CHARGE = 0;
                 flag_bat_is_empty = 1; // 标志位置一，在主循环让绿灯快闪
-#endif
                 break;
             }
             else if (cnt >= 8 || over_charging_cnt >= 8)
+
+#else
+            if (cnt >= 8 || over_charging_cnt >= 8)
+#endif
             {
                 // 如果在充电时，电池之前需要充电，现在检测到充满电
                 full_charge_cnt++;
@@ -613,7 +623,7 @@ void adc_scan_handle(void)
         else // 如果未在充电，检测电池是否需要充电
         {
             // if (adc_val <= ADCDETECT_BAT_FULL - 130)
-            if (flag_bat_is_empty == 0 && adc_val <= ADCDETECT_BAT_FULL - ((ADCDETECT_BAT_FULL - ADCDETECT_BAT_WILL_FULL) / 2))
+            if (adc_val <= ADCDETECT_BAT_FULL - ((ADCDETECT_BAT_FULL - ADCDETECT_BAT_WILL_FULL) / 2))
             {
                 cnt++;
             }
@@ -627,15 +637,13 @@ void adc_scan_handle(void)
             }
 
             if (                           /* 检测电池是否处于关机对应的电压 */
-                flag_bat_is_empty == 0 &&  /* 电池不为空 */
                 FLAG_IS_DEVICE_OPEN &&     /* 设备正在运行 */
                 adc_val < SHUT_DOWN_AD_VAL /* 采集到的ad值小于关机对应的ad值 */
             )
             {
                 flag_tim_scan_maybe_shut_down = 1;
             }
-            else if (flag_bat_is_empty == 0 &&
-                     FLAG_IS_DEVICE_OPEN &&
+            else if (FLAG_IS_DEVICE_OPEN &&
                      adc_val < LOW_BATTERY_AD_VAL)
             {
                 // 检测电池是否处于低电量：
@@ -685,10 +693,6 @@ void adc_scan_handle(void)
     for (i = 0; i < 10; i++)
     {
         adc_val = adc_get_val();
-        if (flag_bat_is_empty) // 如果电池为空
-        {
-            adc_val = 4095; // 防止进入下面的if (adc_val < ADCDETECT_CHARING_THRESHOLD)
-        }
 
         if (adc_charging_val != 0)
         {
@@ -718,31 +722,26 @@ void adc_scan_handle(void)
                 // LED_FULL_CHARGE_OFF(); // 关闭电池充满电的指示灯
                 LED_WORKING_OFF(); // 关闭电池充满电的指示灯（白灯）
 
-                // FLAG_DURING_CHARGING_BAT_IS_NULL = 0; // 清空该标志位，因为已经不在充电的情况下
                 break;
             } // if (cnt >= 8)
 
-            if (FLAG_IS_DEVICE_OPEN)
+            if (0 == FLAG_IS_DEVICE_OPEN)
             {
-            }
-            else // 如果设备未开启
-            {
-                if (FLAG_BAT_IS_FULL)
+                // 如果设备未开启
+                if (0 == FLAG_BAT_IS_FULL &&
+                    0 == flag_is_bat_nearly_fully_charged)
                 {
-                }
-                else
-                {
-                    // 如果未满电
+                    // 如果未满电 或者是 没有接近满电
                     // LED_FULL_CHARGE_OFF();
                     LED_WORKING_OFF();
                     // LED_CHARGING_ON();
                 }
             }
-        } // if (FLAG_IS_IN_CHARGING)
+        }
         else
         {
             // 如果不在充电，检测是否插入了充电线
-            if (flag_bat_is_empty == 0 && adc_val >= ADCDETECT_CHARING_THRESHOLD)
+            if (adc_val >= ADCDETECT_CHARING_THRESHOLD)
             {
                 cnt++;
             }
@@ -842,7 +841,7 @@ void shutdown_scan_handle(void)
     {
         // 如果设备开启，开始计时，15min后自动关机
         // shut_down_ms_cnt += ONE_CYCLE_TIME_MS;
-        if (shut_down_ms_cnt >= 900000)
+        if (shut_down_ms_cnt >= 900000UL)
         {
             // 如果超过了15min，关机：
             LED_WORKING_OFF(); // 关闭电源指示灯
@@ -867,9 +866,7 @@ void shutdown_scan_handle(void)
 
 void low_power_scan_handle(void)
 {
-    // if (FLAG_DURING_CHARGING_BAT_IS_NULL)
     if (
-        // FLAG_DURING_CHARGING_BAT_IS_NULL ||               // 只插着充电器且没有电池时，不进入低功耗
         FLAG_IS_DEVICE_OPEN ||                            // 如果设备已经启动，不进入低功耗
         FLAG_IS_IN_CHARGING ||                            // 如果正在充电，不进入低功耗，因为还需要输出PWM来控制充电
         (0 == P01D) ||                                    // 如果检测到 开关/模式 按键按下，不进入低功耗(交给按键事件处理函数来判断是否要开机)
@@ -878,20 +875,6 @@ void low_power_scan_handle(void)
     {
         return;
     }
-
-    // if (FLAG_IS_DEVICE_OPEN)
-    // {
-    //     // 如果设备已经启动，不进入低功耗
-    //     return;
-    // }
-
-    // // 如果运行到这里，说明设备没有启动
-    // // 可能需要考虑正在充电的情况
-    // if (FLAG_IS_IN_CHARGING)
-    // {
-    //     // 如果正在充电，不进入低功耗，因为还需要输出PWM来控制充电
-    //     return;
-    // }
 
 label:
     GIE = 0;  // 禁用所有中断
@@ -913,7 +896,6 @@ label:
 
     LED_WORKING_OFF();
     LED_CHARGING_OFF();
-    // LED_FULL_CHARGE_OFF();
     INFLATION_CTL_OFF();
     DEFLATION_CTL_OFF();
 
@@ -993,7 +975,6 @@ void main(void)
         if (adc_val >= ADCDETECT_BAT_FULL + ADCDETECT_BAT_NULL_EX)
         {
             flag_bat_is_empty = 1;
-            // FLAG_DURING_CHARGING_BAT_IS_NULL = 1; // 标志位置一，在主循环让绿灯快闪
         }
     }
     PWM2EC = 0; // 关闭控制升压电路的pwm
@@ -1398,8 +1379,11 @@ void int_isr(void) __interrupt
                         // ============================================================
                     }
 
-                    if (cnt >= (u16)15000)
+                    if (INFLATION_CTL_STATUS_INFLATION_HANDLING == inflation_ctl_status &&
+                            (cnt >= ((u16)12 * 1000)) ||
+                        (cnt >= (u16)15000))
                     {
+                        // 充气时，过了 12 秒停止充气。其他情况下，过了 15秒 停止气泵气阀的操作
                         inflation_ctl_status = INFLATION_CTL_STATUS_NONE;
                     }
                 }
@@ -1468,7 +1452,7 @@ void int_isr(void) __interrupt
             {
                 LED_CHARGING_PIN = LED_OFF;
             }
-        } // 呼吸灯控制 if (FLAG_IS_IN_CHARGING && 0 == FLAG_BAT_IS_FULL)
+        }
 
         T3IF = 0;
     }

@@ -304,7 +304,6 @@ volatile u16 last_pwm_val;	   // 记录之前的pwm占空比的值
 volatile u16 tmp_val;		   // 临时存放需要调节的占空比对应的值
 volatile u16 tmp_val_l[8];
 volatile u8 tmp_val_cnt;
-// volatile u8 flag_bat_is_empty; // 标志位，用于检测是否拔出了电池
 
 // 充电累计时间
 volatile u32 charge_time_cnt;
@@ -373,6 +372,15 @@ volatile bit_flag flag3;
 #define flag_ctl_heat_open flag2.bits.bit1	 // 控制标志位，控制 加热的 开/关
 
 #define flag_is_low_battery flag2.bits.bit2 // 标志位，是否检测到低电量
+
+/*
+	标志位，是否检测到电池即将充满电
+
+	用于控制在充电到一定时间后，人为的点亮充满电指示灯，
+	给用户充满电的错觉
+*/
+#define flag_is_bat_nearly_fully_charged flag2.bits.bit3 
+
 
 #define flag_ctl_dir flag3.bits.bit0   // 控制标志位，是否要切换方向
 #define flag_ctl_speed flag3.bits.bit1 // 控制标志位，是否要切换电机转速

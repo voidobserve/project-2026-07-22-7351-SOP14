@@ -1,0 +1,170 @@
+---
+references:
+  - "File: /MC32P7351.c"
+generationTime: 2026-07-22T06:30:30.494Z
+---
+flowchart TD
+    %% Main entry
+    START["System Reset / Power On"] --> SYS_INIT["Sys_Init()"]
+    
+    subgraph SYS_INIT_GRP["System Initialization"]
+        direction TB
+        CR["CLR_RAM()<br/>Clear all RAM"] --> IO_CFG["IO Configuration<br/>P0/P1 direction, pull-ups"]
+        IO_CFG --> LED_OFF["Turn Off All LEDs<br/>& Pump/Valve Controls"]
+        LED_OFF --> TMR_CFG["Timer/PWM Configuration<br/>Timer0/1/2 for PWM<br/>Timer3 for 1ms interrupt"]
+        TMR_CFG --> KEY_CFG["Key Pin Config<br/>P01(Mode) P11(Heat)<br/>Input + Pull-up"]
+        KEY_CFG --> ADC_CFG["adc_config()<br/>12-bit ADC, 3V reference"]
+        ADC_CFG --> EN_INT["Enable Global Interrupt<br/>GIE = 1"]
+    end
+    
+    SYS_INIT --> BAT_CHECK["Battery Installation Check<br/>PWM2 ON, Read ADC for 10 cycles"]
+    
+    BAT_CHECK --> BAT_EMPTY{"adc_val >=<br/>ADCDETECT_BAT_FULL +<br/>ADCDETECT_BAT_NULL_EX ?"}
+    
+    BAT_EMPTY -->|Yes| SET_BAT_EMPTY["flag_bat_is_empty = 1"]
+    BAT_EMPTY -->|No| MAIN_LOOP
+    
+    SET_BAT_EMPTY --> MAIN_LOOP
+    
+    %% Main Loop
+    MAIN_LOOP["Main Loop Start"] --> LOOP_START
+    
+    LOOP_START{"flag_bat_is_empty<br/>== 1 ?"}
+    
+    LOOP_START -->|Yes| EMPTY_BLINK["LED_CHARGING Blink<br/>500ms ON / 500ms OFF"]
+    EMPTY_BLINK --> WATCHDOG["CLRWDT - Feed Watchdog"]
+    WATCHDOG --> LOOP_START
+    
+    LOOP_START -->|No| KEY_HANDLE["key_event_handle()<br/>Process Key Events"]
+    KEY_HANDLE --> ADC_SCAN["adc_scan_handle()<br/>ADC Scanning & Charging Mgmt"]
+    
+    ADC_SCAN --> TURN_DIR["turn_dir_scan_handle()<br/>Direction Control every 120s"]
+    TURN_DIR --> SHUTDOWN["shutdown_scan_handle()<br/>Auto power-off after 15min"]
+    
+    SHUTDOWN --> CHG_PWM_CTRL{"FLAG_IS_IN_CHARGING<br/>== 1 ?"}
+    
+    CHG_PWM_CTRL -->|Yes| PWM_CALC["Calculate Charging PWM<br/>Based on battery voltage<br/>& charging voltage"]
+    PWM_CALC --> PWM_FILTER["Filter PWM value<br/>(8-sample moving avg)<br/>Gradual adjustment"]
+    PWM_FILTER --> SET_PWM["T2DATA = last_pwm_val"]
+    
+    CHG_PWM_CTRL -->|No| SKIP_PWM
+    SET_PWM --> SKIP_PWM
+    
+    SKIP_PWM --> LOW_BAT_ALARM{"flag_is_low_battery<br/>== 1 ?"}
+    
+    LOW_BAT_ALARM -->|Yes| BAT_ALARM["LED_WORKING OFF<br/>LED_CHARGING Blink 200ms<br/>for 20 cycles"]
+    BAT_ALARM --> LOW_POWER
+    
+    LOW_BAT_ALARM -->|No| LOW_POWER
+    
+    LOW_POWER["low_power_scan_handle()<br/>Enter Sleep if conditions met"]
+    LOW_POWER --> WATCHDOG
+    
+    %% Interrupt Service Routine
+    subgraph ISR_GRP["Timer3 Interrupt (every ~1ms)"]
+        direction TB
+        T3_INT["T3IF & T3IE Trigger"] --> TICK_10MS{"10ms elapsed?"}
+        TICK_10MS -->|Yes| KEY_SCAN["key_scan()<br/>Debounce & detect keys"]
+        TICK_10MS -->|No| TIMING_UPD
+        
+        KEY_SCAN --> TIMING_UPD["Update Timing Counters<br/>turn_dir_ms_cnt++<br/>shut_down_ms_cnt++"]
+        
+        TIMING_UPD --> BAT_LOW_DET{"flag_maybe_low_battery?"}
+        BAT_LOW_DET -->|Yes| INC_LOW_CNT["Increment low_bat_cnt"]
+        INC_LOW_CNT --> LOW_5S{"low_bat_cnt >= 5000?"}
+        LOW_5S -->|Yes| SET_LOW_BAT["flag_is_low_battery = 1"]
+        LOW_5S -->|No| SHUT_DOWN_DET
+        
+        BAT_LOW_DET -->|No| CLR_LOW_CNT["low_bat_cnt = 0"]
+        CLR_LOW_CNT --> SHUT_DOWN_DET
+        
+        SHUT_DOWN_DET{"flag_tim_scan_maybe_shut_down?"}
+        SHUT_DOWN_DET -->|Yes| INC_SD_CNT["Increment shut_down_bat_cnt"]
+        INC_SD_CNT --> SD_1000{"cnt >= 1000?"}
+        SD_1000 -->|Yes| SET_SD["flag_is_needed_shut_down = 1"]
+        SD_1000 -->|No| CHG_TIMING
+        
+        SHUT_DOWN_DET -->|No| CLR_SD_CNT["shut_down_bat_cnt = 0"]
+        CLR_SD_CNT --> CHG_TIMING
+        
+        CHG_TIMING{"FLAG_IS_IN_CHARGING?"}
+        CHG_TIMING -->|Yes| UPDATE_CURRENT["Update current timing<br/>flag_is_adjust_pwm_time_comes"]
+        CHG_TIMING -->|No| INFLATION_CTRL
+        
+        INFLATION_CTRL["Inflation/Deflation<br/>State Machine Control"]
+        INFLATION_CTRL --> BREATH_LED{"Charging & not full<br/>& breath enabled?"}
+        BREATH_LED -->|Yes| BREATH_EFFECT["Breathing LED PWM<br/>(20-level PWM, 20ms period)"]
+        BREATH_LED -->|No| ISR_END
+        BREATH_EFFECT --> ISR_END
+    end
+    
+    %% Key Event Handling
+    subgraph KEY_EVENT_GRP["key_event_handle() Logic"]
+        direction TB
+        KE_START["key_event_handle()"] --> KE_DEV_OPEN{"FLAG_IS_DEVICE_OPEN?"}
+        
+        KE_DEV_OPEN -->|Yes - Device ON| KE_MODE_HOLD{"KEY_EVENT_MODE_HOLD?"}
+        KE_MODE_HOLD -->|Yes| KE_POWER_OFF["Power OFF Sequence<br/>LEDs OFF, Heating OFF<br/>PWM OFF, Set Deflation"]
+        
+        KE_MODE_HOLD -->|No| KE_MODE_PRESS{"KEY_EVENT_MODE_PRESS?"}
+        KE_MODE_PRESS -->|Yes| KE_MODE_SWITCH["Switch Mode:<br/>MODE1→MODE2→MODE3<br/>→MODE4→MODE1"]
+        
+        KE_MODE_PRESS -->|No| KE_HEAT{"KEY_EVENT_HEAT_PRESS?"}
+        KE_HEAT -->|Yes| KE_HEAT_TOGGLE{"FLAG_IS_HEATING<br/>toggle ON/OFF"}
+        KE_HEAT_TOGGLE -->|ON| HEAT_ON["Heating ON<br/>LED_CHARGING ON"]
+        KE_HEAT_TOGGLE -->|OFF| HEAT_OFF["Heating OFF<br/>LED_WORKING ON"]
+        
+        KE_DEV_OPEN -->|No - Device OFF| KE_HOLD{"KEY_EVENT_MODE_HOLD<br/>& not charging?"}
+        KE_HOLD -->|Yes| KE_POWER_ON["Power ON Sequence<br/>LED_WORKING ON<br/>PWM1 Enable, Inflation"]
+    end
+    
+    %% ADC Scan Handle (simplified)
+    subgraph ADC_SCAN_GRP["adc_scan_handle() - Charging Detection"]
+        direction TB
+        ADC_START["adc_scan_handle()"] --> ADC_BAT["Switch to ADC_PIN_P02_AN1<br/>(Battery Voltage)"]
+        ADC_BAT --> ADC_BAT_LOOP["Loop 10 times (every ~4.8ms)"]
+        ADC_BAT_LOOP --> ADC_GET["adc_get_val()<br/>20 samples, discard 2 + min + max<br/>Average of 16"]
+        ADC_GET --> ADC_ADJUST{"USE_7361_BOARD<br/>or USE_7361_CHIP?"}
+        ADC_ADJUST -->|7361 Board| ADD_193["Add 193 offset"]
+        ADC_ADJUST -->|7361 Chip| ADD_14["Add 14 offset"]
+        ADC_ADJUST -->|7351 Native| SKIP_OFFSET
+        
+        ADD_193 --> CHK_CHARGING{"FLAG_IS_IN_CHARGING?"}
+        ADD_14 --> CHK_CHARGING
+        SKIP_OFFSET --> CHK_CHARGING
+        
+        CHK_CHARGING -->|Yes| CHK_OVERCURRENT{"Over-charge protection?"}
+        CHK_CHARGING -->|No| CHK_BAT_NEED_CHARGE{"Battery needs charge?"}
+        
+        CHK_BAT_NEED_CHARGE -->|Yes| SET_NEED_CHARGE["FLAG_BAT_IS_NEED_CHARGE = 1"]
+        CHK_BAT_NEED_CHARGE -->|No| CHK_LOW_BAT{"adc < SHUT_DOWN_AD_VAL?"}
+        CHK_LOW_BAT -->|Yes| SET_MAYBE_SD["flag_tim_scan_maybe_shut_down = 1"]
+        CHK_LOW_BAT -->|No| CHK_LOW_VOLT{"adc < LOW_BATTERY_AD_VAL?"}
+        CHK_LOW_VOLT -->|Yes| SET_LOW_BAT_FLAG["flag_maybe_low_battery = 1"]
+        CHK_LOW_VOLT -->|No| CLR_FLAGS["Clear low battery flags"]
+        
+        ADC_BAT_LOOP -->|After loop| ADC_CHG_PIN["Switch to ADC_PIN_P00_AN0<br/>(Charger Detection)"]
+        ADC_CHG_PIN --> ADC_CHG_LOOP["Loop 10 times"]
+        ADC_CHG_LOOP --> CHK_CHARGER_STATUS{"FLAG_IS_IN_CHARGING?"}
+        CHK_CHARGER_STATUS -->|Yes| CHK_DISCONNECT{"adc < THRESHOLD?"}
+        CHK_DISCONNECT -->|Yes 8x| DISCONNECT["Detect charger removed<br/>FLAG_IS_IN_CHARGING = 0<br/>PWM2 OFF"]
+        CHK_CHARGER_STATUS -->|No| CHK_CONNECT{"adc >= THRESHOLD?"}
+        CHK_CONNECT -->|Yes 8x| CONNECT["Detect charger inserted<br/>FLAG_IS_IN_CHARGING = 1<br/>PWM2 ON, Device OFF"]
+    end
+    
+    %% Connections from main to subgraphs
+    KEY_HANDLE -.->|"Calls"| KE_START
+    ADC_SCAN -.->|"Calls"| ADC_START
+    
+    %% Direction control detail
+    TURN_DIR --> DIR_DETAIL{"FLAG_IS_DEVICE_OPEN<br/>& (120s elapsed<br/>OR flag_ctl_dir) ?"}
+    DIR_DETAIL -->|Yes| TOGGLE_DIR{"FLAG_DIR toggle:<br/>PWM0↔PWM1<br/>with 1s delay"}
+    DIR_DETAIL -->|No| SKIP_DIR["Reset counter"]
+    
+    %% Shutdown detail
+    SHUTDOWN --> SD_DETAIL{"Device Open &<br/>shut_down_ms_cnt >= 900000<br/>(15 min) ?"}
+    SD_DETAIL -->|Yes| AUTO_OFF["Auto Power OFF<br/>LEDs OFF, Heating OFF<br/>Mode→MODE4, Deflation"]
+    SD_DETAIL -->|No| SD_SKIP["No action"]
+    
+    %% ISR connection from Timer
+    EN_INT -.->|"T3IE Interrupt<br/>every ~1ms"| T3_INT
