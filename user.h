@@ -366,7 +366,6 @@ volatile bit_flag flag3;
 #define FLAG_IS_NOT_OPEN_DEVICE flag1.bits.bit6 // 是否允许开机的标志位，0--允许开机，1--不允许开机（但是可以充电）
 
 #define flag_is_led_breath_disable flag1.bits.bit7 // 是否关闭充电指示灯(呼吸灯)
-// #define FLAG_DURING_CHARGING_BAT_IS_NULL flag1.bits.bit7 // 标志位，在充电时检测到电池是否为空，0--不为空，1--在充电时，电池为空
 
 #define flag_ctl_device_open flag2.bits.bit0 // 控制标志位，控制打开/关闭设备
 #define flag_ctl_heat_open flag2.bits.bit1	 // 控制标志位，控制 加热的 开/关

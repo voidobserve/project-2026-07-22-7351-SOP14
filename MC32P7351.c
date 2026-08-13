@@ -449,19 +449,6 @@ void key_event_handle(void)
             }
             else if (MODE_3 == mode_flag)
             {
-                // 设置PWM的占空比
-                T0DATA = 0;
-                T1DATA = 0;
-                PWM0EC = 0;
-                PWM1EC = 0;
-                mode_flag = MODE_4;
-
-                inflation_ctl_status = INFLATION_CTL_STATUS_DEFLATION; // 放气
-            }
-            else if (MODE_4 == mode_flag)
-            {
-                // PWM0EC = 1;
-                // PWM1EC = 1;
                 T0DATA = 150;
                 T1DATA = 150;
                 mode_flag = MODE_1;
@@ -469,6 +456,15 @@ void key_event_handle(void)
 
                 inflation_ctl_status = INFLATION_CTL_STATUS_INFLATION; // 充气
             }
+            // else if (MODE_4 == mode_flag)
+            // {
+            //     T0DATA = 150;
+            //     T1DATA = 150;
+            //     mode_flag = MODE_1;
+            //     flag_ctl_dir = 1;
+
+            //     inflation_ctl_status = INFLATION_CTL_STATUS_INFLATION; // 充气
+            // }
 
             turn_dir_ms_cnt = 0; // 重置切换方向的计数
         }
