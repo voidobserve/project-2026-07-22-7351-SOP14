@@ -360,7 +360,7 @@ volatile bit_flag flag3;
 #define FLAG_IS_DEVICE_OPEN flag1.bits.bit0		// 设备是否开机的标志位，0--未开机，1--开机
 #define FLAG_IS_HEATING flag1.bits.bit1			// 加热是否工作的标志位
 #define FLAG_IS_IN_CHARGING flag1.bits.bit2		// 是否处于充电的标志位
-#define FLAG_DIR flag1.bits.bit3				// 正转，反转的标志位， 0--正转（默认是0为正转），1--反转
+
 #define FLAG_BAT_IS_NEED_CHARGE flag1.bits.bit4 // 电池是否需要充电的标志位, 0--不需要充电，1--需要充电
 #define FLAG_BAT_IS_FULL flag1.bits.bit5		// 电池是否满电的标志位，0--未满电，1--满电
 #define FLAG_IS_NOT_OPEN_DEVICE flag1.bits.bit6 // 是否允许开机的标志位，0--允许开机，1--不允许开机（但是可以充电）
@@ -379,6 +379,10 @@ volatile bit_flag flag3;
 	给用户充满电的错觉
 */
 #define flag_is_bat_nearly_fully_charged flag2.bits.bit3 
+
+// 主循环置1，请求中断统一清零 turn_dir_ms_cnt，避免与中断里的++产生读写竞争
+#define flag_clr_turn_dir_cnt flag2.bits.bit4
+
 
 
 #define flag_ctl_dir flag3.bits.bit0   // 控制标志位，是否要切换方向

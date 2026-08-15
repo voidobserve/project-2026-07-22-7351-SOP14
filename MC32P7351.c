@@ -123,43 +123,6 @@ u16 adc_get_val(void)
     return g_temp_value;
 }
 
-#if 0
-// 获取adc单次转换后的值
-u16 adc_get_val_once(void)
-{
-    u16 g_temp_value = 0;
-    ADEOC = 0; // 清除ADC转换完成标志位，启动AD转换
-    while (!ADEOC)
-        ;                // 等待转换完成
-    g_temp_value = ADRH; // 取出转换后的值
-    g_temp_value = g_temp_value << 4 | (ADRL & 0x0F);
-
-// 用7361仿真板进行调试时，这里采集到的ad值要加上193，才接近7351芯片采集到的ad值
-#ifdef USE_7361_BOARD
-    for (i = 0; i < 193; i++)
-    {
-        if (g_temp_value < 4095)
-        {
-            g_temp_value++;
-        }
-    }
-#endif // #ifdef USE_7361_BOARD
-
-#ifdef USE_7361_CHIP
-    // 用7361芯片进行调试时，采集到的ad值只需要加上 14，便接近7351芯片采集到的ad值
-    for (i = 0; i < 14; i++)
-    {
-        if (g_temp_value < 4095)
-        {
-            g_temp_value++;
-        }
-    }
-#endif // #ifdef USE_7361_CHIP
-
-    return g_temp_value;
-}
-#endif
-
 /************************************************
 ;  *    @Function Name       : Sys_Init
 ;  *    @Description         : 系统初始化
@@ -258,22 +221,6 @@ void Sys_Init(void)
     delay_ms(1); // 等待系统稳定
 }
 
-// 获取按键对应的键值(id)
-// u8 get_key_id(void)
-// {
-//     u8 ret = KEY_ID_NONE;
-//     if (0 == KEY_MODE_PIN)
-//     {
-//         ret = KEY_ID_MODE;
-//     }
-//     else if (0 == KEY_HEAT_PIN)
-//     {
-//         ret = KEY_ID_HEAT;
-//     }
-
-//     return ret;
-// }
-
 // 按键扫描函数，最后会得到对应的按键事件
 // 需要放在10ms的定时器中
 void key_scan(void)
@@ -282,7 +229,6 @@ void key_scan(void)
     static volatile u8 press_cnt = 0;               // 按键按下的时间计数
     static volatile u8 filter_cnt = 0;              // 按键消抖，使用的变量
     static volatile u8 filter_key_id = KEY_ID_NONE; // 按键消抖时使用的变量
-    // volatile u8 cur_key_id = get_key_id();          // 获取当前按键的键值(id)
     volatile u8 cur_key_id = KEY_ID_NONE;
 
     static volatile u8 flag_is_key_mode_hold = 0;
@@ -362,14 +308,17 @@ void key_scan(void)
 
         if (KEY_ID_MODE == cur_key_id)
         {
-            if (FLAG_IS_DEVICE_OPEN)
+            if (FLAG_IS_DEVICE_OPEN ||
+                (inflation_ctl_status != INFLATION_CTL_STATUS_NONE))
             {
+                /*
+                    1. 设备没有在工作（工作的标志位没有置一）
+                    2. 设备没有在充气/放气，如果在充气/放气，也说明设备在工作
+                */
+
                 if (press_cnt >= 200) // 2000ms
                 {
-                    if (flag_is_key_mode_hold)
-                    {
-                    }
-                    else
+                    if (0 == flag_is_key_mode_hold)
                     {
                         key_event = KEY_EVENT_MODE_HOLD;
                         flag_is_key_mode_hold = 1;
@@ -379,12 +328,10 @@ void key_scan(void)
             else
             {
                 // 如果当前设备是关闭的
-                if (press_cnt >= 100) // 1000ms加上看门狗唤醒的1024ms
+                // 1000ms加上看门狗唤醒的1024ms，共2024ms
+                if (press_cnt >= 100)
                 {
-                    if (flag_is_key_mode_hold)
-                    {
-                    }
-                    else
+                    if (0 == flag_is_key_mode_hold)
                     {
                         key_event = KEY_EVENT_MODE_HOLD;
                         flag_is_key_mode_hold = 1;
@@ -436,7 +383,6 @@ void key_event_handle(void)
                 T1DATA = 160;
 
                 mode_flag = MODE_2;
-                flag_ctl_dir = 1;
             }
             else if (MODE_2 == mode_flag)
             {
@@ -445,28 +391,15 @@ void key_event_handle(void)
                 T1DATA = 255; // 100%占空比（确保大于TxLOAD的值就可以）
 
                 mode_flag = MODE_3;
-                flag_ctl_dir = 1;
             }
             else if (MODE_3 == mode_flag)
             {
                 T0DATA = 150;
                 T1DATA = 150;
                 mode_flag = MODE_1;
-                flag_ctl_dir = 1;
-
-                inflation_ctl_status = INFLATION_CTL_STATUS_INFLATION; // 充气
             }
-            // else if (MODE_4 == mode_flag)
-            // {
-            //     T0DATA = 150;
-            //     T1DATA = 150;
-            //     mode_flag = MODE_1;
-            //     flag_ctl_dir = 1;
 
-            //     inflation_ctl_status = INFLATION_CTL_STATUS_INFLATION; // 充气
-            // }
-
-            turn_dir_ms_cnt = 0; // 重置切换方向的计数
+            flag_ctl_dir = 1; // 切换方向
         }
         else if (KEY_EVENT_HEAT_PRESS == key_event)
         {
@@ -491,21 +424,23 @@ void key_event_handle(void)
         // 如果设备没有在运行
         if (KEY_EVENT_MODE_HOLD == key_event && 0 == FLAG_IS_IN_CHARGING)
         {
-            // LED_FULL_CHARGE_OFF(); // 关闭满电指示灯
             LED_CHARGING_OFF(); // 关闭充电指示灯
             LED_WORKING_ON();   // 打开电源指示灯
-            FLAG_IS_DEVICE_OPEN = 1;
 
             // 设定正转、反转的PWM的初始占空比
             T0DATA = 150;
             T1DATA = 150;
             mode_flag = MODE_1; // 下一次切换模式时，会变成 MODE_2
-
-            // // 打开控制正转的PWM
-            // PWM0EC = 1;
-
             PWM1EC = 1;
 
+            // 开机时，重置换向计时相关的状态，
+            // 保证第一次换向严格从开机这一刻开始计时，不受之前残留值影响
+            turn_dir_ms_cnt = 0;
+            shut_down_ms_cnt = 0;
+            flag_ctl_dir = 0;
+            flag_clr_turn_dir_cnt = 0;
+
+            FLAG_IS_DEVICE_OPEN = 1;
             inflation_ctl_status = INFLATION_CTL_STATUS_INFLATION; // 充气
         }
     }
@@ -768,32 +703,11 @@ void adc_scan_handle(void)
 
                 flag_is_low_battery = 0; // 清除该标志位
                 break;
-            } // if (cnt >= 8)
-            // if (cnt >= 8)
-            // {
-            //     // 确认是插入充电线后
-            //     full_charge_cnt = 0;
-            //     over_charging_cnt = 0;
-
-            //     if (FLAG_IS_DEVICE_OPEN)
-            //     {
-            //         LED_WORKING_ON(); // 打开工作指示灯
-            //     }
-            //     else
-            //     {
-            //         // 设备不工作时，才打开该指示灯
-            //         LED_CHARGING_ON(); // 开启充电指示灯
-            //     }
-
-            //     PWM2EC = 1; // 开启控制升压电路的pwm
-            //     FLAG_IS_IN_CHARGING = 1;
-            //     break;
-            // } // if (cnt >= 8)
+            }
         }
 
-        // key_scan_handle(); // 按键扫描和处理函数
         key_event_handle();
-    } // for (i = 0; i < 10; i++)
+    }
 }
 
 void turn_dir_scan_handle(void)
@@ -801,32 +715,29 @@ void turn_dir_scan_handle(void)
     if (FLAG_IS_DEVICE_OPEN)
     {
         // 设备运行时，才开始计时并判断是否要转向
-        // turn_dir_ms_cnt += ONE_CYCLE_TIME_MS;
-        if (turn_dir_ms_cnt >= (120000) ||
+        // if (turn_dir_ms_cnt >= ((u32)120000) ||
+        if (turn_dir_ms_cnt >= ((u32)2 * 60 * 1000) ||
             flag_ctl_dir)
         {
-            if (0 == FLAG_DIR)
+            if (PWM1EC)
             {
+                // 如果 PWM1EC == 1，关闭 PWM1EC ，开启 PWM0EC
                 PWM1EC = 0;
                 delay_ms(1000);
                 PWM0EC = 1;
-                FLAG_DIR = 1; //
             }
             else
             {
                 PWM0EC = 0; //
                 delay_ms(1000);
-                PWM1EC = 1;   //
-                FLAG_DIR = 0; //
+                PWM1EC = 1;
             }
 
             flag_ctl_dir = 0;
-            turn_dir_ms_cnt = 0;
+            // turn_dir_ms_cnt 交给中断统一清零，
+            // 避免主循环的4字节清零与中断里的++产生读写竞争，导致计时错乱
+            flag_clr_turn_dir_cnt = 1;
         }
-    }
-    else
-    {
-        turn_dir_ms_cnt = 0; // 设备未运行时，清空计数值
     }
 }
 
@@ -836,15 +747,16 @@ void shutdown_scan_handle(void)
     if (FLAG_IS_DEVICE_OPEN)
     {
         // 如果设备开启，开始计时，15min后自动关机
-        // shut_down_ms_cnt += ONE_CYCLE_TIME_MS;
-        if (shut_down_ms_cnt >= 900000UL)
+        if (shut_down_ms_cnt >= ((u32)15 * 60 * 1000))
         {
             // 如果超过了15min，关机：
             LED_WORKING_OFF(); // 关闭电源指示灯
             LED_CHARGING_OFF();
             HEATING_OFF(); // 关闭加热
             FLAG_IS_HEATING = 0;
-            mode_flag = MODE_4; // 下一次切换模式时，会变成 MODE_1
+
+            // REVIEW
+            mode_flag = MODE_1;
             // 关闭 正转和反转的PWM
             PWM0EC = 0;
             PWM1EC = 0;
@@ -853,17 +765,11 @@ void shutdown_scan_handle(void)
             inflation_ctl_status = INFLATION_CTL_STATUS_DEFLATION;
         }
     }
-    else
-    {
-        // 如果设备未开启，清空计时
-        shut_down_ms_cnt = 0;
-    }
 }
 
 void low_power_scan_handle(void)
 {
-    if (
-        FLAG_IS_DEVICE_OPEN ||                            // 如果设备已经启动，不进入低功耗
+    if (FLAG_IS_DEVICE_OPEN ||                            // 如果设备已经启动，不进入低功耗
         FLAG_IS_IN_CHARGING ||                            // 如果正在充电，不进入低功耗，因为还需要输出PWM来控制充电
         (0 == P01D) ||                                    // 如果检测到 开关/模式 按键按下，不进入低功耗(交给按键事件处理函数来判断是否要开机)
         INFLATION_CTL_STATUS_NONE != inflation_ctl_status // 气泵、气阀还在工作，不进入低功耗
@@ -925,32 +831,10 @@ label:
     {
         // 如果没有按下开机按键、没有插入充电器
         // 关闭ADC，继续进入休眠：
-        // ADEN = 0; //
         goto label;
     }
 
-    // P02PU = 0; // 关闭上下拉
-    // P02PD = 0;
-    // P02OE = 0; // 输入模式
-    // P02DC = 1; // 模拟输入
-    // adc_sel_pin(ADC_PIN_P02_AN1);
-    // adc_val = adc_get_val();
-    // if (adc_val < ADCVAL_REF_BAT_6_0_V)
-    // {
-    //     // 如果电池电量过低，不开机，但是可以充电
-    //     FLAG_IS_NOT_OPEN_DEVICE = 1; // 不允许开机，但是可以充电
-    // }
-    // else
-    // {
-    //     FLAG_IS_NOT_OPEN_DEVICE = 0;
-    // }
-
-    // FLAG_IS_NOT_OPEN_DEVICE = 0;
-
     Sys_Init();
-    // GIE = 1;
-
-    // delay_ms(1); // 等待系统稳定
 }
 
 void main(void)
@@ -973,6 +857,7 @@ void main(void)
             flag_bat_is_empty = 1;
         }
     }
+
     PWM2EC = 0; // 关闭控制升压电路的pwm
     T2DATA = 0;
 
@@ -1124,34 +1009,6 @@ void main(void)
             }
             tmp_val >>= 3;
 
-            // {
-            //     /*
-            //         如果差值过大，则快速调节，如果差值过小，则慢速调节，
-            //         防止电流突变，导致不同的板子最终充电电流不一致
-            //     */
-            //     static u8 cnt = 0;
-            //     cnt++;
-
-            //     if (tmp_val > last_pwm_val)
-            //     {
-            //         if ((tmp_val - last_pwm_val) > 2 || cnt >= 10)
-            //         // if ((tmp_val - last_pwm_val) > 2 || cnt >= 100)
-            //         {
-            //             last_pwm_val++;
-            //             cnt = 0;
-            //         }
-            //     }
-            //     else if (tmp_val < last_pwm_val)
-            //     {
-            //         if ((last_pwm_val - tmp_val) > 2 || cnt >= 10)
-            //         // if ((last_pwm_val - tmp_val) > 2 || cnt >= 100)
-            //         {
-            //             last_pwm_val--;
-            //             cnt = 0;
-            //         }
-            //     }
-            // }
-
             {
                 /*
                     如果差值过大，则快速调节，如果差值过小，则慢速调节，
@@ -1166,21 +1023,11 @@ void main(void)
 
                     if (tmp_val > last_pwm_val)
                     {
-                        // if ((tmp_val - last_pwm_val) > 2 || cnt >= 10)
-                        // if ((tmp_val - last_pwm_val) > 2 || cnt >= 100)
-                        {
-                            last_pwm_val++;
-                            // cnt = 0;
-                        }
+                        last_pwm_val++;
                     }
                     else if (tmp_val < last_pwm_val)
                     {
-                        // if ((last_pwm_val - tmp_val) > 2 || cnt >= 10)
-                        // if ((last_pwm_val - tmp_val) > 2 || cnt >= 100)
-                        {
-                            last_pwm_val--;
-                            // cnt = 0;
-                        }
+                        last_pwm_val--;
                     }
                 }
             }
@@ -1194,7 +1041,6 @@ void main(void)
 
             // 工作时检测到低电量
             LED_CHARGING_ON();
-            // delay_ms(200);
             for (i = 0; i < 20; i++)
             {
                 // key_scan_handle();
@@ -1203,7 +1049,6 @@ void main(void)
             }
 
             LED_CHARGING_OFF();
-            // delay_ms(200);
             for (i = 0; i < 20; i++)
             {
                 // key_scan_handle();
@@ -1246,36 +1091,97 @@ void int_isr(void) __interrupt
     if (T3IF & T3IE)
     {
         {
-            static u8 __1ms_cnt = 0;
-            __1ms_cnt++;
-            if (__1ms_cnt >= 10)
+            static volatile u8 cnt_1ms = 0;  // 控制计时1ms的变量
+            static volatile u8 cnt_10ms = 0; // 控制计时10ms的变量
+            cnt_1ms++;
+            if (cnt_1ms >= 10)
             {
-                __1ms_cnt = 0;
+                cnt_1ms = 0;
                 // 目前每1ms进入一次中断
-                { // 按键扫描
-                    static u8 key_scan_cnt = 0;
-                    key_scan_cnt++;
-                    if (key_scan_cnt >= 10)
-                    {
-                        key_scan_cnt = 0;
-                        key_scan();
+
+                cnt_10ms++;
+                if (cnt_10ms >= 10)
+                {
+                    cnt_10ms = 0;
+                    // =======================================
+                    // 10ms进入一次该语句块
+
+                    key_scan();
+
+                    { // 关机电量检测
+                        static u8 shut_down_bat_cnt = 0;
+                        if (flag_tim_scan_maybe_shut_down)
+                        {
+                            shut_down_bat_cnt++;
+                            if (shut_down_bat_cnt >= 100) // xx ms
+                            {
+                                shut_down_bat_cnt = 0;
+                                flag_is_needed_shut_down = 1;
+                            }
+                        }
+                        else
+                        {
+                            shut_down_bat_cnt = 0;
+                            // flag_is_needed_shut_down = 0;
+                        }
                     }
-                } // 按键扫描
+
+                    { // 充电时，调节电流时间间隔控制
+                        static u8 update_current_time_cnt;
+                        if (FLAG_IS_IN_CHARGING)
+                        {
+                            update_current_time_cnt++;
+                            if (update_current_time_cnt >= 50)
+                            {
+                                update_current_time_cnt = 0;
+                                flag_is_update_current = 1;
+                            }
+
+                            charge_time_cnt += 10;
+                        }
+                        else
+                        {
+                            charge_time_cnt = 0;
+                        }
+                    }
+
+                    {
+                        static u8 cnt = 0;
+                        cnt++;
+                        if (cnt > 50)
+                        {
+                            cnt = 0;
+                            flag_is_adjust_pwm_time_comes = 1;
+                        }
+                    }
+                }
 
                 if (FLAG_IS_DEVICE_OPEN)
                 {
                     turn_dir_ms_cnt++;  // 会在 turn_dir_scan_handle() 内处理并清零
                     shut_down_ms_cnt++; // 会在 shutdown_scan_handle() 内处理并清零
+
+                    if (flag_clr_turn_dir_cnt)
+                    {
+                        // 主循环完成换向后，在这里统一清零换向计时，
+                        // 与上面的++处于同一个上下文，避免读写竞争
+                        flag_clr_turn_dir_cnt = 0;
+                        turn_dir_ms_cnt = 0;
+                    }
+                }
+                else
+                {
+                    // 设备未运行时，清空计数值
+                    turn_dir_ms_cnt = 0;
+                    shut_down_ms_cnt = 0;
+                    flag_clr_turn_dir_cnt = 0;
                 }
 
                 { // 低电量检测
                     static u16 low_bat_cnt = 0;
-                    // static u16 cancel_low_bat_alarm_cnt = 0; // 取消低电量报警的时间计数
-
                     if (flag_maybe_low_battery)
                     {
                         low_bat_cnt++;
-                        // if (low_bat_cnt >= 2000) // xx ms
                         if (low_bat_cnt >= 5000) // xx ms
                         {
                             low_bat_cnt = 0;
@@ -1285,58 +1191,6 @@ void int_isr(void) __interrupt
                     else
                     {
                         low_bat_cnt = 0;
-                    }
-                } // 低电量检测
-
-                { // 关机电量检测
-                    static u16 shut_down_bat_cnt = 0;
-                    if (flag_tim_scan_maybe_shut_down)
-                    {
-                        shut_down_bat_cnt++;
-                        if (shut_down_bat_cnt >= 1000) // xx ms
-                        {
-                            shut_down_bat_cnt = 0;
-                            flag_is_needed_shut_down = 1;
-                        }
-                    }
-                    else
-                    {
-                        shut_down_bat_cnt = 0;
-                        // flag_is_needed_shut_down = 0;
-                    }
-                } // 关机电量检测
-
-                { // 充电时，调节电流时间间隔控制
-                    static u16 update_current_time_cnt;
-                    if (FLAG_IS_IN_CHARGING)
-                    {
-                        update_current_time_cnt++;
-                        if (update_current_time_cnt >= 500)
-                        {
-                            update_current_time_cnt = 0;
-                            flag_is_update_current = 1;
-                        }
-
-                        charge_time_cnt++;
-                    }
-                    else
-                    {
-                        charge_time_cnt = 0;
-                    }
-                    // else
-                    // {
-                    //     FLAG_IS_IN_CHARGING = 0;
-                    // }
-
-                } // 充电时，调节电流时间间隔控制
-
-                {
-                    static u16 cnt = 0;
-                    cnt++;
-                    if (cnt > 500)
-                    {
-                        cnt = 0;
-                        flag_is_adjust_pwm_time_comes = 1;
                     }
                 }
 
